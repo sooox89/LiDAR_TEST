@@ -7,6 +7,7 @@ from mpl_toolkits.mplot3d import Axes3D  # 3D 플롯을 쓰기 위해 필요
 pkl_path = '/home/q/dataset/result.pkl'
 with open(pkl_path, 'rb') as f:
     data = pickle.load(f)
+    print(data)
 
 # 2) 시각화할 프레임 선택
 frame_idx = 0

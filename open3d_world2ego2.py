@@ -138,5 +138,5 @@ axis_world.rotate(R_norm, center=(0,0,0))
 o3d.visualization.draw_geometries(
     [pcd, *obbs, axis_world, axis_ego],
     window_name=f"Rainbow Points & Axes (seq=014 frame={frame_idx})",
-    width=1024, height=768
+    width=720, height=768
 )
