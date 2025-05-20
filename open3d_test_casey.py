@@ -1,97 +1,91 @@
 import numpy as np
 import open3d as o3d
-from pathlib import Path
-import json
-from scipy.spatial.transform import Rotation as R
 
-# ========== 설정 ==========
-seq_name = "001"
-root_dir = Path("/home/q/dataset/demo_output")
-points_dir = root_dir / "points" / seq_name
-pred_dir   = root_dir / "pred" / seq_name
-gt_dir     = root_dir / "gt" / seq_name
-pose_path = Path(f"/home/q/dataset/pandaset/{seq_name}/lidar/poses.json")
-with open(pose_path, 'r') as f:
-    poses = json.load(f)
+# 1) 데이터 로드
+prefix = "/home/q/dataset/pandaset/demo_output/001/0000"
+points = np.load(f"{prefix}_points.npy")[:, :3]
+pred_boxes = np.load(f"{prefix}_pred.npy")
+gt_boxes   = np.load(f"{prefix}_gt.npy")
+gt_labels  = np.load(f"{prefix}_gt_label.npy", allow_pickle=True)
+scores     = np.load(f"{prefix}_score.npy")
+labels     = np.load(f"{prefix}_label.npy")
 
-frame_ids = sorted([f.stem for f in points_dir.glob("*.npy")])
-frame_idx = 0
+# 클래스 이름 및 색상 정의
+class_names = ['Car', 'Pedestrian', 'Motorcycle']
+class_colors = {
+    'Car': [1, 0, 0],          # 빨간색
+    'Pedestrian': [0, 0, 0],   # 검정
+    'Motorcycle': [0.6, 0, 1]  # 보라색
+}
+score_threshold_map = {
+    'Car': 0.5,
+    'Pedestrian': 0.1,
+    'Motorcycle': 0.1
+}
 
+# PointCloud 생성
+pcd = o3d.geometry.PointCloud()
+pcd.points = o3d.utility.Vector3dVector(points)
+pcd.paint_uniform_color([0, 0.5, 1])
+
+# Bounding box 생성 함수
 def create_open3d_box(center, size, yaw, color):
-    obb = o3d.geometry.OrientedBoundingBox()
-    obb.center = center
-    obb.extent = size
-    obb.R = obb.get_rotation_matrix_from_xyz((0, 0, yaw))
+    # Z축 회전 행렬 직접 계산
+    c, s = np.cos(yaw), np.sin(yaw)
+    R = np.array([
+        [ c, -s, 0],
+        [ s,  c, 0],
+        [ 0,  0, 1]
+    ])
+    # OrientedBoundingBox(center, R, extent)
+    obb = o3d.geometry.OrientedBoundingBox(center, R, size)
     obb.color = color
     return obb
 
-def create_axes(pose):
-    t = np.array([pose['position'][k] for k in ['x','y','z']])
-    q = pose['heading']
-    Rw = R.from_quat([q['x'], q['y'], q['z'], q['w']]).as_matrix()
-    R_inv = Rw.T
-    R_norm = np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]])
+# 박스 내 포인트 존재 여부 검사 함수
+def has_points_in_box(box, points):
+    x, y, z, dx, dy, dz, yaw = box
+    # 회전 행렬 (z축 회전)
+    c, s = np.cos(yaw), np.sin(yaw)
+    R = np.array([[ c, -s, 0],
+                  [ s,  c, 0],
+                  [ 0,  0, 1]])
+    # 박스 중심으로 이동 후 회전
+    pts_local = (points - np.array([x, y, z])) @ R
+    inside = (
+        (np.abs(pts_local[:, 0]) <= dx / 2) &
+        (np.abs(pts_local[:, 1]) <= dy / 2) &
+        (np.abs(pts_local[:, 2]) <= dz / 2)
+    )
+    return inside.any()
 
-    axis_ego = o3d.geometry.TriangleMesh.create_coordinate_frame(size=15.0)
-    axis_ego.rotate(R_norm, center=(0,0,0))
+# 예측 박스 시각화 (클래스별 score threshold & 포인트 유무 필터 적용)
+pred_o3d = []
+for box, score, label_idx in zip(pred_boxes, scores, labels):
+    if label_idx < 1 or label_idx > len(class_names):
+        continue
+    cls = class_names[label_idx - 1]
+    if score < score_threshold_map[cls]:
+        continue
+    # 박스 안에 포인트가 하나라도 없으면 스킵
+    if not has_points_in_box(box, points):
+        continue
+    color = class_colors.get(cls, [1, 1, 1])
+    pred_o3d.append(create_open3d_box(center=box[:3], size=box[3:6], yaw=box[6], color=color))
 
-    axis_world = o3d.geometry.TriangleMesh.create_coordinate_frame(size=15.0)
-    axis_world.rotate(R_inv, center=(0,0,0))
-    axis_world.translate(-R_inv @ t)
-    axis_world.rotate(R_norm, center=(0,0,0))
+# GT 박스 시각화
+gt_o3d = []
+for box, label in zip(gt_boxes, gt_labels):
+    if label not in class_names:
+        continue
+    gt_o3d.append(create_open3d_box(center=box[:3], size=box[3:6], yaw=box[6], color=[0, 1, 0]))
 
-    return axis_ego, axis_world
+# 좌표축
+axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=10.0, origin=[0, 0, 0])
 
-def get_frame_geometry(fid):
-    pts = np.load(points_dir / f"{fid}.npy")
-    preds = np.load(pred_dir / f"{fid}.npy")
-    gts = np.load(gt_dir / f"{fid}.npy")
-    pose = poses[int(fid)]
-
-    geometries = []
-    # point cloud
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(pts[:, :3])
-    pcd.paint_uniform_color([0, 0.5, 1])
-    geometries.append(pcd)
-
-    for box in preds:
-        geometries.append(create_open3d_box(box[:3], box[3:6], box[6], [1, 0, 0]))
-    for box in gts:
-        geometries.append(create_open3d_box(box[:3], box[3:6], box[6], [0, 1, 0]))
-
-    axis_ego, axis_world = create_axes(pose)
-    geometries += [axis_ego, axis_world]
-    return geometries
-
-# ========== 시각화 루프 ==========
-vis = o3d.visualization.VisualizerWithKeyCallback()
-vis.create_window(window_name=f"Sequence {seq_name}", width=1024, height=768)
-
-def update_view(fid):
-    vis.clear_geometries()
-    geos = get_frame_geometry(fid)
-    for g in geos:
-        vis.add_geometry(g)
-    vis.poll_events()
-    vis.update_renderer()
-
-def next_frame_callback(vis):
-    global frame_idx
-    frame_idx += 1
-    if frame_idx >= len(frame_ids):
-        print("✅ 마지막 프레임입니다.")
-        return False
-    print(f"▶ 프레임: {frame_ids[frame_idx]}")
-    update_view(frame_ids[frame_idx])
-    return False
-
-# key: → (오른쪽 화살표) or N 키
-vis.register_key_callback(ord("N"), next_frame_callback)
-vis.register_key_callback(262, next_frame_callback)  # 262 = GLFW_KEY_RIGHT
-
-# 초기 프레임 표시
-print(f"▶ 시작 프레임: {frame_ids[frame_idx]}")
-update_view(frame_ids[frame_idx])
-vis.run()
-vis.destroy_window()
+# 시각화 실행
+o3d.visualization.draw_geometries(
+    [pcd, *pred_o3d, *gt_o3d, axis],
+    window_name="Predicted (Colored) vs GT (Green)",
+    width=1024, height=768
+)

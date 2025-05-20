@@ -2,9 +2,9 @@ import numpy as np
 import open3d as o3d
 
 # 1) 데이터 로드
-points     = np.load("/home/q/dataset/demo_output/points/001/00.npy")  # (N,4)
-pred_boxes = np.load("/home/q/dataset/demo_output/pred/001/00.npy")    # (M_pred,7)
-gt_boxes   = np.load("/home/q/dataset/demo_output/gt/001/00.npy")      # (M_gt,7)
+points     = np.load("/home/q/dataset/pandaset/demo_output/001/0079_points.npy")  # (N,4)
+pred_boxes = np.load("/home/q/dataset/pandaset/demo_output/001/0079_pred.npy")    # (M_pred,7)
+gt_boxes   = np.load("/home/q/dataset/pandaset/demo_output/001/0079_gt.npy")      # (M_gt,7)
 
 # 2) PointCloud 생성
 pcd = o3d.geometry.PointCloud()
